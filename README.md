@@ -143,7 +143,7 @@ idf.py -p COMx flash monitor
 
 ## 🛰️ Real-Time MQTT Cloud Telemetry & Remote Control
 
-The device automatically connects to the public MQTT broker `broker.hivemq.com` on port 1883 with Last Will and Testament (LWT) and auto-reconnect.
+The device automatically connects to the public MQTT broker `broker.emqx.io` on port 1883 with Last Will and Testament (LWT) and auto-reconnect.
 
 ### 1. Topic Hierarchy
 Each device derives a unique client ID and topic namespace from its hardware MAC address (`esp32_<MAC6>`):
@@ -202,14 +202,14 @@ Publish any of the following JSON payloads to `esp32_iot/<CLIENT_ID>/cmd` or `es
   {"cmd": "ota", "url": "http://192.168.1.50:8000/firmware.bin"}
   ```
 
-### 4. How to Test via HiveMQ Web Client
-1. Open the free public HiveMQ Web Client in any browser: [HiveMQ WebSocket Client](http://www.hivemq.com/demos/websocket-client/).
-2. Click **Connect** (default settings: host `broker.hivemq.com`, port `8000` / `8884` WSS).
-3. In **Subscriptions**, click **Add New Topic Subscription**:
-   - Topic: `esp32_iot/#` (to listen to all telemetry and responses).
+### 4. How to Test via EMQX Online Web Client
+1. Open the free public EMQX Web Client in any browser: [EMQX Online MQTT Client](http://www.emqx.io/online-mqtt-client/) (or [MQTTX Web](https://mqttx.app/web/)).
+2. Click **New Connection** / **Connect** (default host `broker.emqx.io`, port `8083` or `8084` WSS).
+3. In **Subscriptions**, click **New Subscription**:
+   - Topic: `esp32_iot/#` (to monitor all telemetry packets and command acknowledgments).
 4. In **Publish**, enter:
    - Topic: `esp32_iot/all/cmd`
-   - Message: `{"cmd": "toast", "msg": "Hello from the Cloud!"}`
+   - Message: `{"cmd": "toast", "msg": "Hello from EMQX Cloud!"}`
 5. Watch the ESP32 LCD immediately display the pill toast banner!
 
 ---

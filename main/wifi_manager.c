@@ -32,8 +32,13 @@ static const char *TAG = "WIFI_MGR";
 static EventGroupHandle_t       s_wifi_event_group = NULL;
 static esp_netif_t             *s_sta_netif = NULL;
 static wifi_state_t             s_current_state = WIFI_STATE_UNINITIALIZED;
-static wifi_state_cb_t          s_state_cb = NULL;
-static void                    *s_state_cb_user_data = NULL;
+#define MAX_STATE_OBSERVERS     4
+typedef struct {
+    wifi_state_cb_t cb;
+    void           *user_data;
+} wifi_state_observer_t;
+
+static wifi_state_observer_t   s_state_observers[MAX_STATE_OBSERVERS] = {0};
 
 static wifi_ui_ap_t             s_scanned_aps[MAX_SCANNED_APS];
 static uint16_t                 s_scanned_count = 0;
@@ -44,13 +49,15 @@ static bool                     s_time_synced = false;
 static bool                     s_user_requested_disconnect = false;
 
 // -----------------------------------------------------------------------------
-// Helper: Notify State Change
+// Helper: Notify State Change to all registered observers
 // -----------------------------------------------------------------------------
 static void set_state(wifi_state_t new_state) {
     s_current_state = new_state;
     ESP_LOGI(TAG, "Wi-Fi State Transition -> %d", (int)new_state);
-    if (s_state_cb) {
-        s_state_cb(new_state, s_state_cb_user_data);
+    for (int i = 0; i < MAX_STATE_OBSERVERS; i++) {
+        if (s_state_observers[i].cb) {
+            s_state_observers[i].cb(new_state, s_state_observers[i].user_data);
+        }
     }
 }
 
@@ -230,8 +237,21 @@ esp_err_t wifi_manager_init(void) {
 }
 
 void wifi_manager_register_state_cb(wifi_state_cb_t cb, void *user_data) {
-    s_state_cb = cb;
-    s_state_cb_user_data = user_data;
+    if (!cb) return;
+    for (int i = 0; i < MAX_STATE_OBSERVERS; i++) {
+        if (s_state_observers[i].cb == cb) {
+            s_state_observers[i].user_data = user_data;
+            return;
+        }
+    }
+    for (int i = 0; i < MAX_STATE_OBSERVERS; i++) {
+        if (s_state_observers[i].cb == NULL) {
+            s_state_observers[i].cb = cb;
+            s_state_observers[i].user_data = user_data;
+            return;
+        }
+    }
+    ESP_LOGE(TAG, "Maximum Wi-Fi state observers (%d) reached!", MAX_STATE_OBSERVERS);
 }
 
 esp_err_t wifi_manager_start_scan(void) {

@@ -69,7 +69,7 @@ esp_err_t mqtt_service_init(void) {
     ESP_LOGI(TAG, "  Telemetry:   %s", s_topic_telemetry);
     ESP_LOGI(TAG, "  Command:     %s", s_topic_cmd);
     ESP_LOGI(TAG, "  Broadcast:   %s", s_topic_broadcast_cmd);
-    ESP_LOGI(TAG, "  Web Client:  http://www.hivemq.com/demos/websocket-client/");
+    ESP_LOGI(TAG, "  Web Client:  http://www.emqx.io/online-mqtt-client/");
     ESP_LOGI(TAG, "================================================================");
 
     // 2. Configure MQTT Client (MQTT 3.1.1, TCP Port 1883 with LWT)
@@ -84,7 +84,7 @@ esp_err_t mqtt_service_init(void) {
             .last_will = {
                 .topic = s_topic_status,
                 .msg = "offline",
-                .msg_len = 0,
+                .msg_len = 7,
                 .qos = 1,
                 .retain = 1,
             },

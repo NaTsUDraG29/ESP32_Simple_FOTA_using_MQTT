@@ -12,7 +12,7 @@ extern "C" {
 // -----------------------------------------------------------------------------
 // MQTT Service Configuration Defaults
 // -----------------------------------------------------------------------------
-#define MQTT_DEFAULT_BROKER_URI         "mqtt://broker.hivemq.com:1883"
+#define MQTT_DEFAULT_BROKER_URI         "mqtt://broker.emqx.io:1883"
 #define MQTT_TELEMETRY_INTERVAL_SEC     15
 #define MQTT_MAX_TOPIC_LEN              96
 #define MQTT_MAX_PAYLOAD_LEN            1024
