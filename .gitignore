@@ -1,0 +1,57 @@
+# ==============================================================================
+# ESP-IDF Build & Output Artifacts
+# ==============================================================================
+build/
+**/build/
+*.bin
+*.elf
+*.map
+*.o
+*.a
+*.out
+flasher_args.json
+
+# ESP-IDF Machine-Specific Configuration (sdkconfig.defaults is tracked instead)
+sdkconfig
+sdkconfig.old
+
+# ESP-IDF Managed Components (Downloaded automatically via idf_component.yml)
+managed_components/
+.espressif/
+
+# ==============================================================================
+# IDE & Editor Configurations (Contains local COM ports and absolute paths)
+# ==============================================================================
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosv
+*.sln.docstates
+
+# ==============================================================================
+# Temporary & Backup Files
+# ==============================================================================
+*~
+*.swp
+*.swo
+*.bak
+*.tmp
+*.log
+
+# ==============================================================================
+# Language Servers & Compilers
+# ==============================================================================
+.clangd/
+.ccls-cache/
+compile_commands.json
+
+# ==============================================================================
+# OS Generated Files
+# ==============================================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
