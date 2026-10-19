@@ -7,6 +7,7 @@ idf_component_register(
         "wifi_manager.c"
         "wifi_ui.c"
         "weather_service.c"
+        "mqtt_service.c"
         "main.c"
     INCLUDE_DIRS
         "."

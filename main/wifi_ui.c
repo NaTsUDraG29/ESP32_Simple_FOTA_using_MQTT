@@ -50,6 +50,15 @@ static lv_obj_t *s_weather_temp_label = NULL;
 static lv_obj_t *s_weather_cond_label = NULL;
 static lv_obj_t *s_weather_sub_label = NULL;
 
+// MQTT Cloud Connection Status Badge
+static lv_obj_t *s_clock_mqtt_label = NULL;
+
+// Global Toast Notification Widgets (on lv_layer_top())
+static lv_obj_t *s_toast_container = NULL;
+static lv_obj_t *s_toast_label = NULL;
+static uint32_t  s_toast_hide_time = 0;
+static bool      s_toast_visible = false;
+
 // Periodic Timer Handle
 static lv_timer_t *s_ui_timer = NULL;
 
@@ -61,15 +70,23 @@ static bool     s_display_is_sleeping = false;
 // -----------------------------------------------------------------------------
 // Cross-Thread Decoupling Flags (Core 0 Event Callback -> Core 1 GUI Task)
 // -----------------------------------------------------------------------------
-// LVGL is NOT thread-safe. Wi-Fi events trigger on Core 0, but must only be
+// LVGL is NOT thread-safe. Wi-Fi & MQTT events trigger on Core 0, but must only be
 // rendered on Core 1 by ui_periodic_timer() inside lv_timer_handler().
-static volatile bool s_pending_scan_refresh = false;
-static volatile bool s_pending_show_clock   = false;
-static volatile bool s_pending_show_setup   = false;
-static volatile int  s_pending_spinner      = -1; // -1: none, 0: hide, 1: show
+static volatile bool s_pending_scan_refresh  = false;
+static volatile bool s_pending_show_clock    = false;
+static volatile bool s_pending_show_setup    = false;
+static volatile int  s_pending_spinner       = -1; // -1: none, 0: hide, 1: show
 static char          s_pending_status_msg[96] = {0};
 static lv_color_t    s_pending_status_color;
-static volatile bool s_has_pending_status   = false;
+static volatile bool s_has_pending_status    = false;
+
+// Toast and Remote Control Decoupling Flags
+static char          s_pending_toast_msg[128] = {0};
+static uint32_t      s_pending_toast_duration = 0;
+static volatile bool s_has_pending_toast     = false;
+static volatile bool s_mqtt_status_flag      = false;
+static volatile bool s_pending_remote_sleep  = false;
+static volatile bool s_pending_remote_wake   = false;
 
 // Forward Declarations
 static void create_setup_screen(void);
@@ -283,8 +300,56 @@ static void ui_periodic_timer(lv_timer_t *timer) {
         }
     }
 
-    // 6. Check Inactivity Display Sleep (30 seconds)
+    // 6. Update MQTT Connection Status Badge in Header
+    if (s_clock_mqtt_label) {
+        if (s_mqtt_status_flag) {
+            lv_label_set_text(s_clock_mqtt_label, "● MQTT: CLOUD CONNECTED");
+            lv_obj_set_style_text_color(s_clock_mqtt_label, lv_color_hex(0x10B981), LV_PART_MAIN); // Emerald Green
+        } else {
+            lv_label_set_text(s_clock_mqtt_label, "○ MQTT: OFFLINE");
+            lv_obj_set_style_text_color(s_clock_mqtt_label, lv_color_hex(0x64748B), LV_PART_MAIN); // Slate Gray
+        }
+    }
+
+    // 7. Manage On-Screen Toast Notifications (Auto-dismissing)
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    if (s_has_pending_toast) {
+        s_has_pending_toast = false;
+        if (s_toast_container && s_toast_label) {
+            lv_label_set_text(s_toast_label, s_pending_toast_msg);
+            lv_obj_clear_flag(s_toast_container, LV_OBJ_FLAG_HIDDEN);
+            s_toast_visible = true;
+            s_toast_hide_time = now_ms + s_pending_toast_duration;
+            // Also wake screen if sleeping so alert is visible!
+            if (s_display_is_sleeping) {
+                s_display_is_sleeping = false;
+                lcd_wakeup();
+            }
+            s_last_activity_time = now_ms;
+        }
+    } else if (s_toast_visible) {
+        if (now_ms >= s_toast_hide_time) {
+            s_toast_visible = false;
+            if (s_toast_container) {
+                lv_obj_add_flag(s_toast_container, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+    }
+
+    // 8. Safely process remote sleep/wake commands
+    if (s_pending_remote_wake) {
+        s_pending_remote_wake = false;
+        wifi_ui_notify_activity();
+    } else if (s_pending_remote_sleep) {
+        s_pending_remote_sleep = false;
+        if (!s_display_is_sleeping) {
+            s_display_is_sleeping = true;
+            lcd_sleep();
+            ESP_LOGI(TAG, "Display entered sleep via remote MQTT command.");
+        }
+    }
+
+    // 9. Check Inactivity Display Sleep (30 seconds)
     if (!s_display_is_sleeping && s_last_activity_time > 0 &&
         (now_ms - s_last_activity_time >= DISPLAY_SLEEP_TIMEOUT_MS)) {
         s_display_is_sleeping = true;
@@ -509,6 +574,13 @@ static void create_clock_screen(void) {
     lv_obj_set_style_text_font(badge, &lv_font_montserrat_16, LV_PART_MAIN);
     lv_obj_align(badge, LV_ALIGN_LEFT_MID, 10, 0);
 
+    // MQTT Cloud Status Badge (Centered in Top Header)
+    s_clock_mqtt_label = lv_label_create(top_banner);
+    lv_label_set_text(s_clock_mqtt_label, "○ MQTT: OFFLINE");
+    lv_obj_set_style_text_color(s_clock_mqtt_label, lv_color_hex(0x64748B), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_clock_mqtt_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align(s_clock_mqtt_label, LV_ALIGN_CENTER, -15, 0);
+
     lv_obj_t *btn_disconnect = lv_btn_create(top_banner);
     lv_obj_set_size(btn_disconnect, 130, 30);
     lv_obj_align(btn_disconnect, LV_ALIGN_RIGHT_MID, -10, 0);
@@ -624,6 +696,26 @@ esp_err_t wifi_ui_init(void) {
     create_setup_screen();
     create_clock_screen();
 
+    // Create Global Toast Notification Banner on lv_layer_top()
+    s_toast_container = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s_toast_container, 430, 44);
+    lv_obj_align(s_toast_container, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_set_style_bg_color(s_toast_container, lv_color_hex(0x1E1B4B), LV_PART_MAIN); // Rich Indigo
+    lv_obj_set_style_border_color(s_toast_container, lv_color_hex(0x6366F1), LV_PART_MAIN); // Indigo Accent
+    lv_obj_set_style_border_width(s_toast_container, 2, LV_PART_MAIN);
+    lv_obj_set_style_radius(s_toast_container, 22, LV_PART_MAIN); // Pill shape
+    lv_obj_set_style_shadow_width(s_toast_container, 20, LV_PART_MAIN);
+    lv_obj_set_style_shadow_color(s_toast_container, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_shadow_opa(s_toast_container, LV_OPA_70, LV_PART_MAIN);
+    lv_obj_clear_flag(s_toast_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_toast_container, LV_OBJ_FLAG_HIDDEN);
+
+    s_toast_label = lv_label_create(s_toast_container);
+    lv_label_set_text(s_toast_label, "");
+    lv_obj_set_style_text_color(s_toast_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_toast_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_center(s_toast_label);
+
     // Register callback with Wi-Fi manager
     wifi_manager_register_state_cb(on_wifi_state_changed, NULL);
 
@@ -707,5 +799,25 @@ void wifi_ui_notify_activity(void) {
 
 bool wifi_ui_is_display_sleeping(void) {
     return s_display_is_sleeping;
+}
+
+void wifi_ui_set_mqtt_status(bool connected) {
+    s_mqtt_status_flag = connected;
+}
+
+void wifi_ui_show_toast(const char *msg, uint32_t duration_ms) {
+    if (msg) {
+        snprintf(s_pending_toast_msg, sizeof(s_pending_toast_msg), "%s  %s", LV_SYMBOL_BELL, msg);
+        s_pending_toast_duration = (duration_ms > 0) ? duration_ms : 4000;
+        s_has_pending_toast = true;
+    }
+}
+
+void wifi_ui_sleep_display(void) {
+    s_pending_remote_sleep = true;
+}
+
+void wifi_ui_wake_display(void) {
+    s_pending_remote_wake = true;
 }
 

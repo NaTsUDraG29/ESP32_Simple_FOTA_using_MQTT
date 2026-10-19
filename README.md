@@ -26,9 +26,14 @@ A production-grade, dual-core embedded IoT system built on the **ESP32-WROVER-E*
   * Automatically sleeps display after **30 seconds** of inactivity.
   * Cuts ~180 mA backlight current via TCA9534 P5 and commands ST7796S into Sleep In (`0x10`), dropping system power from ~275 mA to ~80 mA (>70% power savings).
   * Instant tap-to-wake via GT911 capacitive touch with **touch event suppression on wake** (prevents accidental button presses).
+* **Real-Time MQTT Cloud Telemetry & Remote Control**:
+  * Dual-core isolated: `esp-mqtt` socket engine runs on Core 0 with zero impact on LVGL 60 FPS graphics.
+  * Publishes system metrics every 15s (uptime, free heap, RSSI, weather data, screen state) to `esp32_iot/<MAC>/telemetry`.
+  * Supports bidirectional commands: remote sleep/wake, floating toast notifications, dynamic location weather refresh, and OTA update hooks.
+  * Last Will and Testament (LWT) for automatic cloud presence detection.
 * **Thread-Safe Graphics Pipeline**:
   * Recursive mutex (`lvgl_port_lock()` / `lvgl_port_unlock()`) wrapping `lv_timer_handler()`.
-  * Custom dynamic memory allocation (`CONFIG_LV_MEM_CUSTOM=y`) utilizing ESP32 SRAM.
+  * Cross-thread decoupling flags bridge Core 0 networking events safely into Core 1 rendering loop.
 
 ---
 
@@ -36,7 +41,7 @@ A production-grade, dual-core embedded IoT system built on the **ESP32-WROVER-E*
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│  ● ONLINE                             [X Disconnect]   │  <- Status Banner (H: 44px)
+│  ● ONLINE       ● MQTT: CLOUD CONNECTED  [X Disconnect]│  <- Header Banner (H: 44px)
 ├────────────────────────────────────────────────────────┤
 │                                                        │
 │                      14:35:02                          │  <- Clock Card (H: 160px)
@@ -136,11 +141,84 @@ idf.py -p COMx flash monitor
 
 ---
 
+## 🛰️ Real-Time MQTT Cloud Telemetry & Remote Control
+
+The device automatically connects to the public MQTT broker `broker.hivemq.com` on port 1883 with Last Will and Testament (LWT) and auto-reconnect.
+
+### 1. Topic Hierarchy
+Each device derives a unique client ID and topic namespace from its hardware MAC address (`esp32_<MAC6>`):
+- **Telemetry Stream**: `esp32_iot/<CLIENT_ID>/telemetry`
+- **Device Commands**: `esp32_iot/<CLIENT_ID>/cmd`
+- **Broadcast Commands**: `esp32_iot/all/cmd`
+- **LWT Presence**: `esp32_iot/<CLIENT_ID>/status` (`"online"` / `"offline"`)
+- **Command Response**: `esp32_iot/<CLIENT_ID>/response`
+
+### 2. Telemetry Payload (Published every 15s)
+```json
+{
+  "device": "ESP32-WROVER-E",
+  "client_id": "esp32_246F28XXXXXX",
+  "uptime_sec": 340,
+  "free_heap": 178240,
+  "min_free_heap": 152190,
+  "display": "awake",
+  "wifi": {
+    "ssid": "MyWiFi",
+    "ip": "192.168.1.105",
+    "rssi": -55
+  },
+  "weather": {
+    "city": "Bengaluru",
+    "temp_c": 26.5,
+    "condition": "Partly Cloudy",
+    "humidity": 65,
+    "wind_kmh": 12.4
+  }
+}
+```
+
+### 3. Remote Control Commands
+Publish any of the following JSON payloads to `esp32_iot/<CLIENT_ID>/cmd` or `esp32_iot/all/cmd`:
+
+* **Display Power Control**:
+  ```json
+  {"cmd": "display", "action": "sleep"}
+  {"cmd": "display", "action": "wake"}
+  ```
+* **Instant On-Screen Notification Toast**:
+  ```json
+  {"cmd": "toast", "msg": "Doorbell Rang at Front Gate!", "duration_ms": 5000}
+  ```
+* **Dynamic Location Weather Change**:
+  ```json
+  {"cmd": "set_city", "name": "London", "lat": 51.5074, "lon": -0.1278}
+  ```
+* **Ping / Telemetry On-Demand**:
+  ```json
+  {"cmd": "ping"}
+  ```
+* **OTA Firmware Update Trigger (Hook for Task 4)**:
+  ```json
+  {"cmd": "ota", "url": "http://192.168.1.50:8000/firmware.bin"}
+  ```
+
+### 4. How to Test via HiveMQ Web Client
+1. Open the free public HiveMQ Web Client in any browser: [HiveMQ WebSocket Client](http://www.hivemq.com/demos/websocket-client/).
+2. Click **Connect** (default settings: host `broker.hivemq.com`, port `8000` / `8884` WSS).
+3. In **Subscriptions**, click **Add New Topic Subscription**:
+   - Topic: `esp32_iot/#` (to listen to all telemetry and responses).
+4. In **Publish**, enter:
+   - Topic: `esp32_iot/all/cmd`
+   - Message: `{"cmd": "toast", "msg": "Hello from the Cloud!"}`
+5. Watch the ESP32 LCD immediately display the pill toast banner!
+
+---
+
 ## 🗺️ Roadmap
 - [x] **Task 1**: Standalone Hardware Bringup (ST7796S SPI, GT911 I2C, TCA9534, LVGL).
 - [x] **Task 2**: Wi-Fi Station Manager, NVS Persistence, SNTP Sync, Display Sleep.
 - [x] **Task 3A**: Live Cloud Weather REST API Client (HTTPS + cJSON).
-- [ ] **Task 3B**: MQTT 3.1.1/5.0 Cloud Telemetry (`esp-mqtt`).
+- [x] **Task 3B**: MQTT 3.1.1/5.0 Cloud Telemetry & Remote Control (`esp-mqtt`).
 - [ ] **Task 4**: Dual-Partition OTA (Over-The-Air) Firmware Updates.
 
 ---
