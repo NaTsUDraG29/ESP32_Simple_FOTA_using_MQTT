@@ -14,6 +14,7 @@
 #include "wifi_ui.h"
 #include "weather_service.h"
 #include "mqtt_service.h"
+#include "ota_service.h"
 
 #include "freertos/semphr.h"
 
@@ -161,7 +162,14 @@ void app_main(void) {
         ESP_LOGI(TAG, "MQTT Service Initialized.");
     }
 
-    // 12. Check if saved Wi-Fi credentials exist in Flash NVS
+    // 12. Initialize Dual-Partition OTA & Rollback Protection
+    if (ota_service_init() != ESP_OK) {
+        ESP_LOGE(TAG, "OTA Service Initialization Failed!");
+    } else {
+        ESP_LOGI(TAG, "OTA Service Initialized.");
+    }
+
+    // 13. Check if saved Wi-Fi credentials exist in Flash NVS
     char saved_ssid[WIFI_MAX_SSID_LEN] = {0};
     char saved_pwd[WIFI_MAX_PASSWORD_LEN] = {0};
     if (wifi_manager_load_credentials(saved_ssid, saved_pwd) == ESP_OK && strlen(saved_ssid) > 0) {

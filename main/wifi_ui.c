@@ -59,6 +59,24 @@ static lv_obj_t *s_toast_label = NULL;
 static uint32_t  s_toast_hide_time = 0;
 static bool      s_toast_visible = false;
 
+// Firmware OTA Modal Widgets (on lv_layer_top())
+static lv_obj_t *s_ota_modal       = NULL;
+static lv_obj_t *s_ota_dialog      = NULL;
+static lv_obj_t *s_ota_title       = NULL;
+static lv_obj_t *s_ota_url_label   = NULL;
+static lv_obj_t *s_ota_bar         = NULL;
+static lv_obj_t *s_ota_percent_lbl = NULL;
+static lv_obj_t *s_ota_status_lbl  = NULL;
+static bool      s_ota_active      = false;
+
+// OTA Decoupling Flags (Core 0 OTA Task -> Core 1 GUI Task)
+static char          s_pending_ota_url[256]    = {0};
+static char          s_pending_ota_status[96]  = {0};
+static int           s_pending_ota_percent     = 0;
+static volatile bool s_pending_ota_show        = false;
+static volatile bool s_pending_ota_update      = false;
+static volatile bool s_pending_ota_hide        = false;
+
 // Periodic Timer Handle
 static lv_timer_t *s_ui_timer = NULL;
 
@@ -92,6 +110,7 @@ static volatile bool s_pending_remote_wake   = false;
 static void create_setup_screen(void);
 static void create_clock_screen(void);
 static void create_pwd_modal(void);
+static void create_ota_modal(void);
 
 // -----------------------------------------------------------------------------
 // Event Handlers: Password Modal & Keyboard
@@ -349,8 +368,43 @@ static void ui_periodic_timer(lv_timer_t *timer) {
         }
     }
 
-    // 9. Check Inactivity Display Sleep (30 seconds)
-    if (!s_display_is_sleeping && s_last_activity_time > 0 &&
+    // 9. Manage OTA Firmware Update Modal
+    if (s_pending_ota_show) {
+        s_pending_ota_show = false;
+        s_ota_active = true;
+        if (s_ota_modal) {
+            if (s_ota_url_label) lv_label_set_text(s_ota_url_label, s_pending_ota_url);
+            if (s_ota_bar) lv_bar_set_value(s_ota_bar, 0, LV_ANIM_OFF);
+            if (s_ota_percent_lbl) lv_label_set_text(s_ota_percent_lbl, "0%");
+            if (s_ota_status_lbl) {
+                lv_label_set_text(s_ota_status_lbl, "Connecting to OTA server...");
+                lv_obj_set_style_text_color(s_ota_status_lbl, lv_color_hex(0x38BDF8), LV_PART_MAIN);
+            }
+            lv_obj_clear_flag(s_ota_modal, LV_OBJ_FLAG_HIDDEN);
+            if (s_display_is_sleeping) {
+                s_display_is_sleeping = false;
+                lcd_wakeup();
+            }
+            s_last_activity_time = now_ms;
+        }
+    }
+    if (s_pending_ota_update) {
+        s_pending_ota_update = false;
+        if (s_ota_bar) lv_bar_set_value(s_ota_bar, s_pending_ota_percent, LV_ANIM_ON);
+        if (s_ota_percent_lbl) lv_label_set_text_fmt(s_ota_percent_lbl, "%d%%", s_pending_ota_percent);
+        if (s_ota_status_lbl) lv_label_set_text(s_ota_status_lbl, s_pending_ota_status);
+        s_last_activity_time = now_ms;
+    }
+    if (s_pending_ota_hide) {
+        s_pending_ota_hide = false;
+        s_ota_active = false;
+        if (s_ota_modal) {
+            lv_obj_add_flag(s_ota_modal, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    // 10. Check Inactivity Display Sleep (30 seconds, suppressed during active OTA)
+    if (!s_display_is_sleeping && !s_ota_active && s_last_activity_time > 0 &&
         (now_ms - s_last_activity_time >= DISPLAY_SLEEP_TIMEOUT_MS)) {
         s_display_is_sleeping = true;
         lcd_sleep();
@@ -685,6 +739,70 @@ static void create_clock_screen(void) {
 }
 
 // -----------------------------------------------------------------------------
+// Screen Creation: OTA Firmware Update Progress Modal (lv_layer_top)
+// -----------------------------------------------------------------------------
+static void create_ota_modal(void) {
+    s_ota_modal = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s_ota_modal, 480, 320);
+    lv_obj_align(s_ota_modal, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(s_ota_modal, lv_color_hex(0x020617), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_ota_modal, LV_OPA_90, LV_PART_MAIN);
+    lv_obj_set_style_border_width(s_ota_modal, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(s_ota_modal, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(s_ota_modal, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_ota_modal, LV_OBJ_FLAG_HIDDEN);
+
+    s_ota_dialog = lv_obj_create(s_ota_modal);
+    lv_obj_set_size(s_ota_dialog, 430, 230);
+    lv_obj_center(s_ota_dialog);
+    lv_obj_set_style_bg_color(s_ota_dialog, lv_color_hex(0x0F172A), LV_PART_MAIN);
+    lv_obj_set_style_border_color(s_ota_dialog, lv_color_hex(0x06B6D4), LV_PART_MAIN);
+    lv_obj_set_style_border_width(s_ota_dialog, 2, LV_PART_MAIN);
+    lv_obj_set_style_radius(s_ota_dialog, 16, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(s_ota_dialog, 30, LV_PART_MAIN);
+    lv_obj_set_style_shadow_color(s_ota_dialog, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_shadow_opa(s_ota_dialog, LV_OPA_80, LV_PART_MAIN);
+    lv_obj_clear_flag(s_ota_dialog, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_ota_title = lv_label_create(s_ota_dialog);
+    lv_label_set_text(s_ota_title, LV_SYMBOL_DOWNLOAD "  FIRMWARE UPGRADE (OTA)");
+    lv_obj_set_style_text_color(s_ota_title, lv_color_hex(0x38BDF8), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_ota_title, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_align(s_ota_title, LV_ALIGN_TOP_MID, 0, 5);
+
+    s_ota_url_label = lv_label_create(s_ota_dialog);
+    lv_label_set_text(s_ota_url_label, "Connecting...");
+    lv_obj_set_style_text_color(s_ota_url_label, lv_color_hex(0x94A3B8), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_ota_url_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_label_set_long_mode(s_ota_url_label, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_ota_url_label, 380);
+    lv_obj_set_style_text_align(s_ota_url_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_align(s_ota_url_label, LV_ALIGN_TOP_MID, 0, 36);
+
+    s_ota_bar = lv_bar_create(s_ota_dialog);
+    lv_obj_set_size(s_ota_bar, 370, 22);
+    lv_obj_align(s_ota_bar, LV_ALIGN_CENTER, 0, 5);
+    lv_bar_set_range(s_ota_bar, 0, 100);
+    lv_bar_set_value(s_ota_bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_radius(s_ota_bar, 11, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_ota_bar, lv_color_hex(0x1E293B), LV_PART_MAIN);
+    lv_obj_set_style_radius(s_ota_bar, 11, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(s_ota_bar, lv_color_hex(0x06B6D4), LV_PART_INDICATOR);
+
+    s_ota_percent_lbl = lv_label_create(s_ota_dialog);
+    lv_label_set_text(s_ota_percent_lbl, "0%");
+    lv_obj_set_style_text_color(s_ota_percent_lbl, lv_color_hex(0xF8FAFC), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_ota_percent_lbl, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_align(s_ota_percent_lbl, LV_ALIGN_CENTER, 0, 35);
+
+    s_ota_status_lbl = lv_label_create(s_ota_dialog);
+    lv_label_set_text(s_ota_status_lbl, "Initializing...");
+    lv_obj_set_style_text_color(s_ota_status_lbl, lv_color_hex(0x34D399), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_ota_status_lbl, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align(s_ota_status_lbl, LV_ALIGN_BOTTOM_MID, 0, -8);
+}
+
+// -----------------------------------------------------------------------------
 // Public Functions
 // -----------------------------------------------------------------------------
 esp_err_t wifi_ui_init(void) {
@@ -695,6 +813,9 @@ esp_err_t wifi_ui_init(void) {
 
     create_setup_screen();
     create_clock_screen();
+
+    // Create OTA Firmware Update Modal on lv_layer_top()
+    create_ota_modal();
 
     // Create Global Toast Notification Banner on lv_layer_top()
     s_toast_container = lv_obj_create(lv_layer_top());
@@ -820,4 +941,28 @@ void wifi_ui_sleep_display(void) {
 void wifi_ui_wake_display(void) {
     s_pending_remote_wake = true;
 }
+
+void wifi_ui_show_ota(const char *url) {
+    if (url) {
+        strncpy(s_pending_ota_url, url, sizeof(s_pending_ota_url) - 1);
+        s_pending_ota_url[sizeof(s_pending_ota_url) - 1] = '\0';
+    } else {
+        s_pending_ota_url[0] = '\0';
+    }
+    s_pending_ota_show = true;
+}
+
+void wifi_ui_update_ota_progress(int percent, size_t bytes_read, size_t total_bytes, const char *status_msg) {
+    s_pending_ota_percent = percent;
+    if (status_msg) {
+        strncpy(s_pending_ota_status, status_msg, sizeof(s_pending_ota_status) - 1);
+        s_pending_ota_status[sizeof(s_pending_ota_status) - 1] = '\0';
+    }
+    s_pending_ota_update = true;
+}
+
+void wifi_ui_hide_ota(void) {
+    s_pending_ota_hide = true;
+}
+
 

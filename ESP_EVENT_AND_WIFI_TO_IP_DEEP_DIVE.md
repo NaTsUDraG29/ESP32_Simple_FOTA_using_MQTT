@@ -487,3 +487,4 @@ With Wi-Fi, SNTP, HTTPS REST, and MQTT remote control fully operational, the sys
 ---
 
 *This document is maintained as the authoritative architectural reference in [`ESP_EVENT_AND_WIFI_TO_IP_DEEP_DIVE.md`](file:///c:/C_notes/ESP32_Bringup/ESP32_WIFI_IOT/ESP_EVENT_AND_WIFI_TO_IP_DEEP_DIVE.md).*
+   

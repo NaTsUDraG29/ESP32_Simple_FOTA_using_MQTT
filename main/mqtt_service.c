@@ -14,6 +14,7 @@
 #include "wifi_manager.h"
 #include "wifi_ui.h"
 #include "weather_service.h"
+#include "ota_service.h"
 
 static const char *TAG = "MQTT_SERVICE";
 
@@ -327,10 +328,14 @@ static void handle_mqtt_command(const char *topic, int topic_len, const char *da
         cJSON *url_item = cJSON_GetObjectItemCaseSensitive(root, "url");
         if (cJSON_IsString(url_item) && url_item->valuestring) {
             ESP_LOGI(TAG, "OTA Trigger requested via MQTT: %s", url_item->valuestring);
-            wifi_ui_show_toast("OTA Triggered via MQTT!", 5000);
-            cJSON_AddStringToObject(resp, "status", "acknowledged");
-            cJSON_AddStringToObject(resp, "ota_url", url_item->valuestring);
-            cJSON_AddStringToObject(resp, "notice", "Task 4 OTA handler hook ready");
+            esp_err_t ota_err = ota_service_start(url_item->valuestring);
+            if (ota_err == ESP_OK) {
+                cJSON_AddStringToObject(resp, "status", "started");
+                cJSON_AddStringToObject(resp, "ota_url", url_item->valuestring);
+            } else {
+                cJSON_AddStringToObject(resp, "status", "error");
+                cJSON_AddStringToObject(resp, "error", esp_err_to_name(ota_err));
+            }
         } else {
             cJSON_AddStringToObject(resp, "status", "error");
             cJSON_AddStringToObject(resp, "error", "missing_ota_url");

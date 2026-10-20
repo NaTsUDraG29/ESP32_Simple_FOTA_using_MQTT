@@ -39,6 +39,11 @@ void wifi_ui_set_mqtt_status(bool connected);
 // On-Screen Toast Notification Banner (Auto-dismissing)
 void wifi_ui_show_toast(const char *msg, uint32_t duration_ms);
 
+// Firmware OTA Progress Modal (Overlay on lv_layer_top)
+void wifi_ui_show_ota(const char *url);
+void wifi_ui_update_ota_progress(int percent, size_t bytes_read, size_t total_bytes, const char *status_msg);
+void wifi_ui_hide_ota(void);
+
 // LVGL Thread Safety Lock Functions (implemented in main.c)
 bool lvgl_port_lock(uint32_t timeout_ms);
 void lvgl_port_unlock(void);
