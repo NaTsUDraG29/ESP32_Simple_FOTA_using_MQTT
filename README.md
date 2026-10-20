@@ -1,19 +1,26 @@
 # ESP32 Smart IoT Dashboard & Weather Station 🛰️
 
-A production-grade, dual-core embedded IoT system built on the **ESP32-WROVER-E** running **ESP-IDF v6.x** and **LVGL v8.4**. Features an ST7796S 480×320 SPI LCD with DMA, GT911 capacitive touch, TCA9534 I/O expansion, Wi-Fi station management, SNTP atomic clock sync, live Open-Meteo REST API weather telemetry, and intelligent low-power inactivity display sleep.
+A production-grade, dual-core embedded IoT system built on the **ESP32-WROVER-E** running **ESP-IDF v6.x** and **LVGL v8.4**. Features an ST7796S 480×320 SPI LCD with DMA, GT911 capacitive touch, TCA9534 I/O expansion, Wi-Fi station management, SNTP atomic clock sync, live Open-Meteo REST API weather telemetry, intelligent low-power inactivity display sleep, real-time MQTT cloud telemetry, and a **dual-partition Over-The-Air (OTA) firmware update engine with hardware bootloader rollback protection**.
 
 ---
 
 ## 🌟 System Highlights
 
 * **Dual-Core FreeRTOS Architecture**:
-  * **Core 0 (Networking & Background)**: Wi-Fi driver, LwIP TCP/IP stack, SNTP synchronization, and asynchronous HTTPS REST client.
+  * **Core 0 (Networking & Background)**: Wi-Fi driver, LwIP TCP/IP stack, SNTP synchronization, asynchronous HTTPS REST client, `esp-mqtt` socket engine, and OTA streaming task.
   * **Core 1 (Presentation & User Input)**: Dedicated 60 FPS LVGL graphic engine with recursive mutex synchronization.
+* **Production Dual-Partition OTA with Hardware Rollback Protection**:
+  * **Dual Ping-Pong Partition Table** (`ota_0` and `ota_1`, 1920 KB each) with `otadata` (8 KB) on 4MB Flash.
+  * **Bootloader Rollback Protection** (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`): Newly flashed images boot in `ESP_OTA_IMG_PENDING_VERIFY` state. If the new app panics, hits a watchdog timeout, or crashes before validating itself, the hardware bootloader automatically reverts to the previous working slot on the next reboot.
+  * **Self-Diagnostic Validation Gate**: Subsystem health checks (SPI, I2C, LCD, Touch, Netif) confirm proper startup before invoking `esp_ota_mark_app_valid_cancel_rollback()`.
+  * **Live On-Screen Progress Modal**: Overlay on `lv_layer_top()` featuring an animated Cyan progress bar (0–100%), real-time byte counters (`Flashing: 45% (650 / 1443 KB)`), target URL, and status messages. Inactivity display sleep is suppressed during download.
+  * **Remote MQTT Trigger**: Initiated remotely by publishing `{"cmd": "ota", "url": "..."}` to the device command topic. Supports HTTPS (Mozilla CA bundle) and plain HTTP for local development servers.
 * **Wi-Fi Manager with Resilient Auto-Reconnect**:
   * Scans all 2.4 GHz channels and dynamically populates interactive list widgets.
   * On-screen touch QWERTY keyboard with masked password entry and toggleable visibility.
   * **5-attempt auto-reconnect state machine** with exponential/pacing backoff when router signal drops.
   * **Flash NVS Write-Wear Prevention**: "Read-Before-Write" verification gate eliminates redundant Flash sector erases.
+  * **Multi-Subscriber Observer Pattern**: Broadcasts Wi-Fi state transitions to UI, SNTP, MQTT, and Weather services without tight coupling.
 * **SNTP Real-Time Atomic Clock**:
   * 4-timestamp latency compensation algorithm synchronizing with `pool.ntp.org`.
   * POSIX timezone management for Indian Standard Time (`IST-5:30`, UTC+5:30) with automatic calendar and leap year tracking.
@@ -29,8 +36,8 @@ A production-grade, dual-core embedded IoT system built on the **ESP32-WROVER-E*
 * **Real-Time MQTT Cloud Telemetry & Remote Control**:
   * Dual-core isolated: `esp-mqtt` socket engine runs on Core 0 with zero impact on LVGL 60 FPS graphics.
   * Publishes system metrics every 15s (uptime, free heap, RSSI, weather data, screen state) to `esp32_iot/<MAC>/telemetry`.
-  * Supports bidirectional commands: remote sleep/wake, floating toast notifications, dynamic location weather refresh, and OTA update hooks.
-  * Last Will and Testament (LWT) for automatic cloud presence detection.
+  * Supports bidirectional commands: remote sleep/wake, floating toast notifications, dynamic location weather refresh, and remote OTA updates.
+  * Last Will and Testament (LWT) for automatic cloud presence detection on `broker.emqx.io`.
 * **Thread-Safe Graphics Pipeline**:
   * Recursive mutex (`lvgl_port_lock()` / `lvgl_port_unlock()`) wrapping `lv_timer_handler()`.
   * Cross-thread decoupling flags bridge Core 0 networking events safely into Core 1 rendering loop.
@@ -56,6 +63,23 @@ A production-grade, dual-core embedded IoT system built on the **ESP32-WROVER-E*
 └───────────────────────────┴────────────────────────────┘
 ```
 
+### Over-The-Air (OTA) Progress Modal (Overlay on `lv_layer_top`)
+
+```
+┌────────────────────────────────────────────────────────┐
+│                                                        │
+│      ┌──────────────────────────────────────────┐      │
+│      │        ⬇  FIRMWARE UPGRADE (OTA)         │      │
+│      │  http://192.168.1.50:8000/firmware.bin   │      │
+│      │                                          │      │
+│      │  [████████████████████░░░░░░░░░░░░░░░░]  │      │
+│      │                   52%                    │      │
+│      │      Flashing: 52% (750 / 1443 KB)       │      │
+│      └──────────────────────────────────────────┘      │
+│                                                        │
+└────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## 🔌 Hardware Pinout & Peripherals
@@ -74,20 +98,37 @@ A production-grade, dual-core embedded IoT system built on the **ESP32-WROVER-E*
 
 ---
 
+## 💾 Flash Memory & Partition Table
+
+Configured via [`partitions.csv`](partitions.csv) for standard 4MB Flash (`0x400000` bytes):
+
+| Partition | Type | SubType | Flash Offset | Size | Purpose |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **nvs** | `data` | `nvs` | `0x009000` | 24 KB (`0x6000`) | Wi-Fi credentials, non-volatile parameters |
+| **otadata** | `data` | `ota` | `0x00F000` | 8 KB (`0x2000`) | Active boot slot selector & rollback state |
+| **phy_init** | `data` | `phy` | `0x011000` | 4 KB (`0x1000`) | RF calibration data |
+| **ota_0** | `app` | `ota_0` | `0x020000` | 1920 KB (`0x1E0000`) | Ping-pong application slot 0 (~1.875 MB) |
+| **ota_1** | `app` | `ota_1` | `0x200000` | 1920 KB (`0x1E0000`) | Ping-pong application slot 1 (~1.875 MB) |
+
+> **Firmware Headroom**: The built binary occupies `0x170320` bytes (~1.43 MB), providing **447 KB (23%) of free headroom** in each OTA partition.
+
+---
+
 ## 📂 Project Structure
 
 ```
 ESP32_WIFI_IOT/
-├── CMakeLists.txt                              # Top-level project CMake file
+├── CMakeLists.txt                              # Top-level project CMake configuration
+├── partitions.csv                              # 4MB dual OTA ping-pong partition table
 ├── dependencies.lock                           # Locked IDF component versions
-├── sdkconfig.defaults                          # Tracked Kconfig settings (fonts, heap, float)
+├── sdkconfig.defaults                          # Tracked Kconfig settings (4MB, OTA, LVGL fonts)
 ├── .gitignore                                  # Git exclusion rules
-├── README.md                                   # Project documentation
+├── README.md                                   # Comprehensive project documentation
 │
 ├── docs/                                       # Deep-dive architectural guides
 │   ├── EMBEDDED_DEBUGGING_AND_POWER_GUIDE.md   # Register crash forensics & power modes
 │   ├── TASK3_WEATHER_REST_API_ARCHITECTURE.md  # Open-Meteo HTTPS REST specification
-│   ├── ESP_EVENT_AND_WIFI_TO_IP_DEEP_DIVE.md   # Wi-Fi to IP state traversal analysis
+│   ├── ESP_EVENT_AND_WIFI_TO_IP_DEEP_DIVE.md   # Wi-Fi to IP, MQTT & function pointer deep-dive
 │   └── WIFI_TCP_IP_SNTP_ARCHITECTURE.md        # Network & SNTP system design
 │
 └── main/                                       # Firmware source files
@@ -98,9 +139,11 @@ ESP32_WIFI_IOT/
     ├── tca9534.c / .h                          # I2C I/O expander driver (backlight & resets)
     ├── lcd.c / .h                              # ST7796S SPI driver & LVGL flush callback
     ├── gt911_touch.c / .h                      # GT911 touch driver & LVGL input callback
-    ├── wifi_manager.c / .h                     # Station mode, NVS, retry machine, SNTP
-    ├── wifi_ui.c / .h                          # LVGL screen builders & timer rendering
-    └── weather_service.c / .h                  # HTTPS client & cJSON Open-Meteo parser
+    ├── wifi_manager.c / .h                     # Station mode, NVS, retry machine, SNTP, Observer
+    ├── wifi_ui.c / .h                          # LVGL screen builders, toast banner, OTA modal
+    ├── weather_service.c / .h                  # HTTPS client & cJSON Open-Meteo parser
+    ├── mqtt_service.c / .h                     # MQTT 3.1.1 telemetry & remote command engine
+    └── ota_service.c / .h                      # Dual-partition OTA update & rollback manager
 ```
 
 ---
@@ -116,28 +159,84 @@ ESP32_WIFI_IOT/
 idf.py set-target esp32
 idf.py build
 ```
-*(The IDF Component Manager will automatically download `lvgl/lvgl` and `espressif/cjson` into `managed_components/` on first build).*
+*(The IDF Component Manager will automatically download `lvgl/lvgl`, `espressif/cjson`, and `espressif/mqtt` into `managed_components/` on first build).*
 
-### 2. Flash to Hardware
+### 2. Initial Flash to Hardware (Writes New Partition Table)
+Because this project uses custom dual ping-pong partitions (`partitions.csv`), the first flash must write the bootloader, partition table, initial OTA data, and application image:
+
 ```bash
-# Replace COMx with your board's serial port (e.g. COM7 on Windows, /dev/ttyUSB0 on Linux)
+# Using standard IDF command:
 idf.py -p COMx flash monitor
+
+# Or using esptool directly:
+python -m esptool --chip esp32 -p COMx -b 921600 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_freq 40m --flash_size 4MB 0x1000 build/bootloader/bootloader.bin 0x8000 build/partition_table/partition-table.bin 0xf000 build/ota_data_initial.bin 0x20000 build/ESP32_WIFI_IOT.bin
 ```
 
 ---
 
-## 🚀 Execution Flow
+## 🔄 Dual-Partition OTA & Rollback Protection (Task 4)
 
-1. **Boot**: Initializes SPI, I2C, and sets up TCA9534 expander to power on display and touch.
-2. **UI Mount**: Creates setup screen and clock screen in RAM, starts 2ms hardware LVGL tick.
-3. **Core Task Spawn**: Spawns `gui_task` on **Core 1** and `weather_task` on **Core 0**.
-4. **Wi-Fi Check**:
-   * If credentials exist in NVS -> Automatically connects.
-   * If first boot -> Launches active 2.4 GHz channel scan and lists SSIDs.
-5. **Connection**: User selects network, enters password on virtual keyboard, associations complete, DHCP assigns IP.
-6. **Time & Cloud Sync**: SNTP synchronizes with `pool.ntp.org`, system time is set to IST, and `weather_task` queries `api.open-meteo.com` over HTTPS.
-7. **Display**: Shows large digital clock, date, network telemetry, and live weather telemetry.
-8. **Inactivity**: After 30 seconds of no touch input, screen enters low-power sleep; tapping anywhere instantly wakes the panel.
+### 1. Architectural Workflow
+
+```
+[Remote MQTT Command]
+        │
+        ▼ {"cmd": "ota", "url": "http://<IP>:8000/firmware.bin"}
+[mqtt_service.c] (Core 0)
+        │
+        ▼ ota_service_start(url)
+[ota_service.c] (Core 0 Background Task, 8KB Stack)
+        ├── Connects via esp_https_ota (HTTP or HTTPS with Mozilla CA)
+        ├── Dispatches atomic progress updates to wifi_ui.c
+        ├── Writes chunks to passive partition (ota_0 ⇄ ota_1)
+        ▼
+[wifi_ui.c] (Core 1 GUI Task)
+        └── Renders OTA Modal on lv_layer_top with Cyan Bar & Byte Counters
+        │
+        ▼ (Download Complete & Checksum Valid)
+[otadata partition updated]
+        │
+        ▼ esp_restart()
+[2nd Stage Bootloader]
+        ├── Reads otadata: boots new slot in PENDING_VERIFY state
+        ▼
+[Application Boot: ota_service_validate_running_app()]
+        ├── Hardware & peripheral self-diagnostics pass
+        ├── Calls esp_ota_mark_app_valid_cancel_rollback()
+        ▼
+[Firmware Confirmed Permanent] ➔ Celebratory On-Screen Toast Banner!
+```
+
+### 2. Safety & Rollback Guarantee
+If the new firmware suffers a kernel panic, memory corruption, brownout, or watchdog reset before calling `esp_ota_mark_app_valid_cancel_rollback()`, the ESP-IDF 2nd-stage bootloader detects that the image failed verification and **automatically boots back into the previously working firmware slot** on the next reset.
+
+### 3. How to Perform an Over-The-Air Update
+
+#### Step A: Host Firmware Locally
+In your development terminal, start an HTTP server directly from the `build/` directory:
+```powershell
+cd C:\C_notes\ESP32_Bringup\ESP32_WIFI_IOT\build
+python -m http.server 8000
+```
+Check your laptop's local Wi-Fi IP address with `ipconfig` (e.g. `192.168.1.50`).
+
+#### Step B: Trigger the OTA Update via MQTT
+Using **MQTTX**, the **EMQX Web Client**, or CLI, publish to your device's command topic:
+* **Topic**: `esp32_iot/<CLIENT_ID>/cmd` (or broadcast `esp32_iot/all/cmd`)
+* **Payload**:
+  ```json
+  {
+    "cmd": "ota",
+    "url": "http://192.168.1.50:8000/ESP32_WIFI_IOT.bin"
+  }
+  ```
+
+#### Step C: Watch the Live Visual Update
+1. The ESP32 screen dims and displays the **FIRMWARE UPGRADE (OTA)** modal.
+2. The animated Cyan progress bar updates from **0% to 100%** with real-time byte counters.
+3. The board validates SHA-256 integrity and reboots within 3 seconds.
+4. On reboot, the bootloader switches partitions, verifies startup, and displays:
+   > *"OTA Update Successful! Firmware validated."*
 
 ---
 
@@ -180,6 +279,10 @@ Each device derives a unique client ID and topic namespace from its hardware MAC
 ### 3. Remote Control Commands
 Publish any of the following JSON payloads to `esp32_iot/<CLIENT_ID>/cmd` or `esp32_iot/all/cmd`:
 
+* **Over-The-Air Firmware Upgrade**:
+  ```json
+  {"cmd": "ota", "url": "http://192.168.1.50:8000/ESP32_WIFI_IOT.bin"}
+  ```
 * **Display Power Control**:
   ```json
   {"cmd": "display", "action": "sleep"}
@@ -197,32 +300,17 @@ Publish any of the following JSON payloads to `esp32_iot/<CLIENT_ID>/cmd` or `es
   ```json
   {"cmd": "ping"}
   ```
-* **OTA Firmware Update Trigger (Hook for Task 4)**:
-  ```json
-  {"cmd": "ota", "url": "http://192.168.1.50:8000/firmware.bin"}
-  ```
-
-### 4. How to Test via EMQX Online Web Client
-1. Open the free public EMQX Web Client in any browser: [EMQX Online MQTT Client](http://www.emqx.io/online-mqtt-client/) (or [MQTTX Web](https://mqttx.app/web/)).
-2. Click **New Connection** / **Connect** (default host `broker.emqx.io`, port `8083` or `8084` WSS).
-3. In **Subscriptions**, click **New Subscription**:
-   - Topic: `esp32_iot/#` (to monitor all telemetry packets and command acknowledgments).
-4. In **Publish**, enter:
-   - Topic: `esp32_iot/all/cmd`
-   - Message: `{"cmd": "toast", "msg": "Hello from EMQX Cloud!"}`
-5. Watch the ESP32 LCD immediately display the pill toast banner!
 
 ---
 
 ## 🗺️ Roadmap
-- [x] **Task 1**: Standalone Hardware Bringup (ST7796S SPI, GT911 I2C, TCA9534, LVGL).
-- [x] **Task 2**: Wi-Fi Station Manager, NVS Persistence, SNTP Sync, Display Sleep.
-- [x] **Task 3A**: Live Cloud Weather REST API Client (HTTPS + cJSON).
+- [x] **Task 1**: Standalone Hardware Bringup (ST7796S SPI, GT911 I2C, TCA9534, LVGL v8.4).
+- [x] **Task 2**: Wi-Fi Station Manager, NVS Persistence, SNTP Sync, Display Sleep & Tap-to-Wake.
+- [x] **Task 3A**: Live Cloud Weather REST API Client (HTTPS Open-Meteo + cJSON).
 - [x] **Task 3B**: MQTT 3.1.1/5.0 Cloud Telemetry & Remote Control (`esp-mqtt`).
-- [ ] **Task 4**: Dual-Partition OTA (Over-The-Air) Firmware Updates.
+- [x] **Task 4**: Production Dual-Partition OTA Updates with Bootloader Rollback & Live UI Progress Modal.
 
 ---
 
 ## 📄 License
 This project is licensed under the MIT License.
-

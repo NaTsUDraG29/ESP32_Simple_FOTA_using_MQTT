@@ -106,9 +106,11 @@ esp_err_t ota_service_validate_running_app(void) {
             }
             ESP_LOGI(TAG, "==================================================");
             return err;
-        } else if (ota_state == ESP_OTA_IMG_VALID) {
+        } 
+        else if (ota_state == ESP_OTA_IMG_VALID) {
             ESP_LOGI(TAG, "  Status: Partition is already verified and marked VALID.");
-        } else {
+        } 
+        else {
             ESP_LOGI(TAG, "  Status: Partition state code 0x%02x", ota_state);
         }
     } else {
@@ -306,3 +308,4 @@ static void ota_download_task(void *pvParameters) {
     s_ota_task_handle = NULL;
     vTaskDelete(NULL);
 }
+

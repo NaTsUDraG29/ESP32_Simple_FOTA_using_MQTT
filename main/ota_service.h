@@ -65,3 +65,4 @@ esp_err_t ota_service_validate_running_app(void);
 #endif
 
 #endif // OTA_SERVICE_H
+
